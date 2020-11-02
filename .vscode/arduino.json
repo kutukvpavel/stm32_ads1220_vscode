@@ -1,5 +1,5 @@
 {
-    "sketch": "app.ino",
+    "sketch": "stm32_ads1220_vscode.ino",
     "board": "Arduino_STM32:STM32F1:genericSTM32F103C",
     "configuration": "device_variant=STM32F103C8,upload_method=DFUUploadMethod,cpu_speed=speed_72mhz,opt=osstd",
     "port": "COM47"
