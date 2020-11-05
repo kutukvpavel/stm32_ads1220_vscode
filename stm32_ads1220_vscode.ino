@@ -57,6 +57,7 @@ void acquisition()
 	{
 		buffer[i] = ADS1220_NO_DATA;
 	}
+	usb_serial_println("ACQ.");
 	status |= STATUS_ACQUISITION;
 	reset_rtc(acquisition_limit);
 	acquisition_timer.refresh();
@@ -75,7 +76,7 @@ void acquisition()
 				buffer[i] = (buffer[i] * REFERENCE_VOLTAGE) / ADC_FULL_SCALE; //While waiting, compute last result for this channel
 				buffer[i] = buffer[i] * calibration_coefficients[i] + calibration_offset[i];
 			}
-			usb_serial_print(adc_module_channels[i]); usb_serial_print(": "); //Print current channel constant
+			usb_serial_print(adc_module_channels[i], HEX); usb_serial_print(": "); //Print current channel constant
 			adc_module.read_result_blocking();
 			adc_module.start_conversion();
 			if (buffer[i] != ADS1220_NO_DATA)
@@ -93,7 +94,7 @@ void acquisition()
 		if (usb_serial.available()) process_command(); //While waiting again, check for any commands (A = STOP in particular)
 		while (!(status & STATUS_TIMER_OVF));
 	}
-	usb_serial_println("FINISHED.");
+	usb_serial_println("END.");
 	status &= ~(STATUS_ACQUISITION | STATUS_STOP_REQ);
 }
 
@@ -234,5 +235,6 @@ void loop() {
 		status &= ~STATUS_START_REQ;
 		acquisition();
 	}
+	if (!usb_serial) nvic_sys_reset();
 	delay(1);
 }

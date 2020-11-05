@@ -1,16 +1,21 @@
 #include "my_api.h"
 
+uint8_t hex2byte(char hex);
+
+uint8_t hex2byte(char hex) {
+    if(hex > 0x39) hex -= 7; // adjust for hex letters upper or lower case
+    return(hex & 0xf);
+}
+
 bool parse_helper(char* buf, bool has_args, char** value, size_t* i)
 {
 	if (has_args)
 	{
-		char index[3];
-		strncpy(index, buf, arraySize(index) - 1);
-		index[arraySize(index) - 1] = '\0';
-		*i = atoi(index);
+		*i = hex2byte(buf[1]);
+		if (buf[0] != ' ') *i += hex2byte(buf[0]) * 0x10;
 		if (*i >= 0 && *i < arraySize(adc_module_channels))
 		{
-			*value = buf + arraySize(index) - 1;
+			*value = buf + 2;
 			return true;
 		}
 		else
