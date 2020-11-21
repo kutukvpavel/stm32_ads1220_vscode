@@ -8,9 +8,7 @@
 
 /* Constant definitions */
 
-#define PIN_ADC_CS PA4
-#define PIN_ADC_DRDY PB0
-#define WAIT_FOR_PC 15000 //mS
+//#define WAIT_FOR_PC 15000 //mS
 #define PC_BUFFER_LEN 32 //bytes
 #define REFERENCE_VOLTAGE 2.048 //V
 #define ADC_FULL_SCALE 0x7FFFFF //3-byte-wide integer
@@ -21,7 +19,6 @@
 
 /* Globals */
 
-extern ADS1220 adc_module;
 extern USBSerial usb_serial;
 extern RTClock rtc_clock;
 extern HardwareTimer acquisition_timer;

@@ -8,13 +8,16 @@
 
 /* Global definitions */
 
-ADS1220 adc_module;
+ADS1220 adc_modules[] = { ADS1220() };
 USBSerial usb_serial;
 RTClock rtc_clock;
 HardwareTimer acquisition_timer(ACQUISITION_TIMER_NUMBER);
 
 volatile uint8_t status = 0;
 
+#define ADC_MODULE_CS 0
+#define ADC_MODULE_DRDY 1
+uint8_t adc_module_pins[][2] = { { PA4, PB0 } }; //CS, DRDY
 int16_t adc_module_channels[] = { MUX_AIN0_AIN1, MUX_AIN2_AIN3 }; //Internal indexes
 float calibration_coefficients[] = { 1, 1 }; // V/V
 float calibration_offset[] = { 0.000010, 0.000010 }; //V
@@ -44,6 +47,47 @@ void reset_rtc(time_t limit)
 	status &= ~STATUS_RTC_ALARM;
 }
 
+void channel_acquisition(float buffer[arraySize(adc_module_channels)][arraySize(adc_modules)], uint8_t i)
+{
+	for (uint8_t j = 0; j < arraySize(adc_modules); j++) //Start parallel conversions
+	{
+		adc_modules[j].select_mux_channels(adc_module_channels[i]);
+		adc_modules[j].set_pga_gain(adc_module_gain[i]);
+		adc_modules[j].start_conversion();
+	}
+	for (uint8_t j = 0; j < arraySize(adc_modules); j++) //While waiting, compute last result for this channel
+	{
+		float last = buffer[i][j];
+		if (last != ADS1220_NO_DATA)
+		{
+			last = (last * REFERENCE_VOLTAGE) / ADC_FULL_SCALE;
+			buffer[i][j] = last * calibration_coefficients[i] + calibration_offset[i];
+		}
+	}
+	for (uint8_t j = 0; j < arraySize(adc_modules); j++) //Discard the first conversion after MUX switching
+	{
+		adc_modules[j].read_result_blocking();
+		adc_modules[j].start_conversion();
+	}
+	for (uint8_t j = 0; j < arraySize(adc_modules); j++)
+	{
+		usb_serial_print(adc_module_channels[i], HEX); //TODO: combine module and channel indexes
+		usb_serial_print(": "); //Print current channel constant
+		if (buffer[i][j] != ADS1220_NO_DATA)
+		{
+			usb_serial_println(buffer[i][j], 6); //Print last result (microvolts precision)
+		}
+		else
+		{
+			usb_serial_println("NOT_READY!");
+		}
+	}
+	for (uint8_t j = 0; j < arraySize(adc_modules); j++)
+	{
+		buffer[i][j] = adc_modules[j].read_result_blocking(); //Use second result
+	}
+}
+
 void acquisition()
 {
 	//Prepare
@@ -52,10 +96,13 @@ void acquisition()
 		usb_serial_println("RECURSION!");
 		return;
 	}
-	float buffer[arraySize(adc_module_channels)];
+	float buffer[arraySize(adc_module_channels)][arraySize(adc_modules)];
 	for (uint8_t i = 0; i < arraySize(buffer); i++)
 	{
-		buffer[i] = ADS1220_NO_DATA;
+		for (uint8_t j = 0; j < arraySize(adc_modules); j++)
+		{
+			buffer[i][j] = ADS1220_NO_DATA;
+		}
 	}
 	usb_serial_println("ACQ.");
 	status |= STATUS_ACQUISITION;
@@ -68,31 +115,14 @@ void acquisition()
 		digitalWrite(PIN_SYNC_OUTPUT, HIGH);
 		for (size_t i = 0; i < arraySize(adc_module_channels); i++)
 		{
-			adc_module.select_mux_channels(adc_module_channels[i]);
-			adc_module.set_pga_gain(adc_module_gain[i]);
-			adc_module.start_conversion(); //Discard the first conversion after MUX switching
-			if (buffer[i] != ADS1220_NO_DATA)
-			{
-				buffer[i] = (buffer[i] * REFERENCE_VOLTAGE) / ADC_FULL_SCALE; //While waiting, compute last result for this channel
-				buffer[i] = buffer[i] * calibration_coefficients[i] + calibration_offset[i];
-			}
-			usb_serial_print(adc_module_channels[i], HEX); usb_serial_print(": "); //Print current channel constant
-			adc_module.read_result_blocking();
-			adc_module.start_conversion();
-			if (buffer[i] != ADS1220_NO_DATA)
-			{
-				usb_serial_println(buffer[i], 6); //And print it (microvolts precision)
-			}
-			else
-			{
-				usb_serial_println("NOT_READY!");
-			}
-			buffer[i] = adc_module.read_result_blocking(); //Use second result
+			channel_acquisition(buffer, i);
 		}
 		digitalWrite(PIN_SYNC_OUTPUT, LOW);
 		//Wait for next point time
-		if (usb_serial.available()) process_command(); //While waiting again, check for any commands (A = STOP in particular)
 		while (!(status & STATUS_TIMER_OVF));
+		{
+			if (usb_serial.available()) process_command(); //While waiting again, check for any commands (A = STOP in particular)
+		}
 	}
 	usb_serial_println("END.");
 	status &= ~(STATUS_ACQUISITION | STATUS_STOP_REQ);
@@ -190,6 +220,17 @@ void load_settings()
 	load_setting(&acquisition_period, EEP_RANGE_ACQ_PERIOD);
 }
 
+void wait_for_pc()
+{
+	if (usb_serial) return;
+	digitalWrite(LED_BUILTIN, LOW);
+	while (!usb_serial);
+	digitalWrite(LED_BUILTIN, HIGH);
+	usb_serial_println("Goodnight moon.");
+	print_settings();
+	usb_serial_println("READY...");
+}
+
 /* Main */
 
 void setup() {
@@ -199,42 +240,30 @@ void setup() {
 	load_settings();
 	//Hardware
 	pinMode(LED_BUILTIN, OUTPUT_OPEN_DRAIN);
-	digitalWrite(LED_BUILTIN, LOW);
 	pinMode(PIN_SYNC_OUTPUT, OUTPUT_OPEN_DRAIN);
-	adc_module.begin(PIN_ADC_CS, PIN_ADC_DRDY);
-	adc_module.set_data_rate(acquisition_speed);
+	//wait_for_pc();
+	for (uint8_t i = 0; i < arraySize(adc_modules); i++)
+	{
+		adc_modules[i].begin(adc_module_pins[i][ADC_MODULE_CS], adc_module_pins[i][ADC_MODULE_DRDY]);
+		adc_modules[i].set_data_rate(acquisition_speed);
+	}
 	rtc_clock.attachAlarmInterrupt(rtc_alarm_isr);
 	acquisition_timer.attachInterrupt(0, acq_timer_isr);
 	acquisition_timer.setPeriod(static_cast<uint32_t>(acquisition_period) * 1000u);
-	//Wait for PC
-	uint32_t i;
-	for (i = 0; i < WAIT_FOR_PC; i++)
-	{
-		if (usb_serial) break;
-		delay(1);
-	}
-	delay(1000);
-	digitalWrite(LED_BUILTIN, HIGH);
-	if (i == WAIT_FOR_PC)
-	{
-		nvic_sys_reset(); //If no connection has been established, reset
-	}
 	//Print EEPROM contents
 	#ifdef EEPROM_TRACE
-	load_settings(); //Once more for debug
+	wait_for_pc();
+	load_settings(); //Once more for debug, can't reorder the calls
 	#endif
-	usb_serial_println("Goodnight moon.");
-	print_settings();
-	usb_serial_println("READY...");
 }
 
 void loop() {
+	wait_for_pc(); // Blocks only if the connection is lost
 	process_command();
 	if (status & STATUS_START_REQ)
 	{
 		status &= ~STATUS_START_REQ;
 		acquisition();
 	}
-	if (!usb_serial) nvic_sys_reset();
 	delay(1);
 }
